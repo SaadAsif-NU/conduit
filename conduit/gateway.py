@@ -23,6 +23,7 @@ from .types import ChatRequest, RequestOutcome
 def _build_cache(config: GatewayConfig) -> ResponseCache:
     mode = config.cache.mode
     if mode == "exact":
+        config.data_dir.mkdir(parents=True, exist_ok=True)
         return ExactCache(config.data_dir / "cache.db", ttl=config.cache.ttl)
     if mode == "semantic":
         return SemanticCache(threshold=config.cache.threshold)
@@ -65,6 +66,9 @@ class Gateway:
 
     def usage(self) -> dict[str, object]:
         return self.ledger.summary()
+
+    def recent(self, limit: int = 20) -> list[dict[str, object]]:
+        return self.ledger.recent(limit)
 
     async def aclose(self) -> None:
         await self.router.aclose()

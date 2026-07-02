@@ -83,3 +83,22 @@ def test_invalid_request_body_is_422(client):
     # missing 'messages'
     resp = client.post("/v1/chat/completions", json={"model": "echo"})
     assert resp.status_code == 422
+
+
+def test_response_has_request_id(client):
+    resp = client.get("/health")
+    assert resp.headers["x-request-id"].startswith("req_")
+
+
+def test_inbound_request_id_is_honoured(client):
+    resp = client.get("/health", headers={"x-request-id": "trace-123"})
+    assert resp.headers["x-request-id"] == "trace-123"
+
+
+def test_usage_recent(client):
+    _chat(client, model="gpt-4o", content="one")
+    _chat(client, model="echo", content="two")
+    recent = client.get("/usage/recent?limit=5").json()["requests"]
+    assert len(recent) == 2
+    assert recent[0]["model"] == "echo"  # newest first
+    assert "provider" in recent[0] and "latency_ms" in recent[0]

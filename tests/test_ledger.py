@@ -52,6 +52,16 @@ def test_cache_hits_counted():
     assert ledger.summary()["cache_hits"] == 1
 
 
+def test_recent_returns_newest_first():
+    ledger = UsageLedger()
+    ledger.record(_entry(model="a"))
+    ledger.record(_entry(model="b"))
+    ledger.record(_entry(model="c"))
+    recent = ledger.recent(limit=2)
+    assert [r["model"] for r in recent] == ["c", "b"]
+    assert set(recent[0]) >= {"request_id", "provider", "cost_usd", "latency_ms", "cached"}
+
+
 def test_record_outcome():
     ledger = UsageLedger()
     outcome = RequestOutcome(

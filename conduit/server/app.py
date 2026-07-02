@@ -9,9 +9,10 @@ headers.
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -21,6 +22,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from .. import __version__
 from ..errors import ConduitError
 from ..gateway import Gateway
+from ..observability import configure_logging, log_event
 from ..types import ChatRequest, ChatResponse
 from .deps import GatewayDep, close_gateway
 from .schemas import ErrorResponse, ModelCard, ModelList, error_response
@@ -35,6 +37,7 @@ def _client_key(authorization: str | None) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    configure_logging(os.environ.get("CONDUIT_LOG_LEVEL", "INFO"))
     yield
     # Close provider network clients / the ledger on shutdown.
     await close_gateway()
@@ -46,6 +49,37 @@ app = FastAPI(
     summary="A self-hostable, OpenAI-compatible LLM gateway.",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def request_context(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Attach a request id, time the request, and emit one structured access log.
+
+    An inbound ``X-Request-ID`` is honoured (useful for tracing across services);
+    otherwise a fresh one is minted. Gateway metadata set by the chat route
+    (``X-Conduit-*``) is folded into the log line so each record shows which
+    provider served the request and what it cost.
+    """
+    request_id = request.headers.get("x-request-id") or f"req_{uuid.uuid4().hex}"
+    started = time.perf_counter()
+    response = await call_next(request)
+    latency_ms = round((time.perf_counter() - started) * 1000.0, 2)
+    response.headers["X-Request-ID"] = request_id
+
+    log_event(
+        "http_request",
+        request_id=request_id,
+        method=request.method,
+        path=request.url.path,
+        status=response.status_code,
+        latency_ms=latency_ms,
+        provider=response.headers.get("X-Conduit-Provider"),
+        cost_usd=response.headers.get("X-Conduit-Cost-USD"),
+        cached=response.headers.get("X-Conduit-Cached"),
+    )
+    return response
 
 
 @app.exception_handler(ConduitError)
@@ -151,3 +185,8 @@ async def list_models(gateway: GatewayDep) -> ModelList:
 @app.get("/usage", tags=["meta"])
 async def usage(gateway: GatewayDep) -> dict[str, object]:
     return gateway.usage()
+
+
+@app.get("/usage/recent", tags=["meta"])
+async def usage_recent(gateway: GatewayDep, limit: int = 20) -> dict[str, object]:
+    return {"requests": gateway.recent(max(1, min(limit, 200)))}

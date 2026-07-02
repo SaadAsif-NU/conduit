@@ -133,6 +133,30 @@ class UsageLedger:
             ],
         }
 
+    def recent(self, limit: int = 20) -> list[dict[str, object]]:
+        """The most recent requests (newest first) for a live activity view."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT request_id, created, model, provider, prompt_tokens, completion_tokens, "
+                "cost_usd, latency_ms, cached, status FROM usage ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "request_id": r["request_id"],
+                "created": r["created"],
+                "model": r["model"],
+                "provider": r["provider"],
+                "prompt_tokens": r["prompt_tokens"],
+                "completion_tokens": r["completion_tokens"],
+                "cost_usd": round(r["cost_usd"], 6),
+                "latency_ms": round(r["latency_ms"], 2),
+                "cached": bool(r["cached"]),
+                "status": r["status"],
+            }
+            for r in rows
+        ]
+
     def count(self) -> int:
         with self._lock:
             return int(self._conn.execute("SELECT COUNT(*) AS n FROM usage").fetchone()["n"])
