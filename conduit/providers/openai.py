@@ -1,12 +1,15 @@
 """OpenAI-compatible upstream adapter.
 
 Works against the OpenAI API or any server that speaks the same
-``/chat/completions`` shape (vLLM, Together, Groq, a local llama.cpp server, …).
+``/chat/completions`` shape (vLLM, Together, Groq, or a local llama.cpp server).
 HTTP and transport failures are mapped onto the typed error hierarchy so the
 router can retry or fail over intelligently.
 """
 
 from __future__ import annotations
+
+import json
+from collections.abc import AsyncIterator
 
 import httpx
 
@@ -65,5 +68,54 @@ class OpenAIProvider(Provider):
         # The response already matches our OpenAI-compatible schema.
         return ChatResponse.model_validate(resp.json())
 
+    async def stream(self, request: ChatRequest) -> AsyncIterator[str]:
+        payload: dict[str, object] = {
+            "model": request.model,
+            "messages": [m.model_dump() for m in request.messages],
+            "temperature": request.temperature,
+            "stream": True,
+        }
+        if request.max_tokens is not None:
+            payload["max_tokens"] = request.max_tokens
+
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{self._base_url}/chat/completions",
+                json=payload,
+                headers=self._headers,
+            ) as resp:
+                if resp.status_code >= 400:
+                    body = (await resp.aread()).decode("utf-8", "replace")
+                    raise ProviderError(
+                        f"upstream returned {resp.status_code}: {body[:200]}",
+                        provider=self.name,
+                        retryable=resp.status_code in _RETRYABLE_STATUS,
+                    )
+                async for line in resp.aiter_lines():
+                    delta = _parse_sse_delta(line)
+                    if delta:
+                        yield delta
+        except httpx.TimeoutException as exc:
+            raise ProviderTimeout(str(exc), provider=self.name) from exc
+        except httpx.HTTPError as exc:
+            raise ProviderError(str(exc), provider=self.name, retryable=True) from exc
+
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+def _parse_sse_delta(line: str) -> str | None:
+    """Extract the content delta from one OpenAI streaming SSE line."""
+    if not line.startswith("data:"):
+        return None
+    data = line[len("data:") :].strip()
+    if not data or data == "[DONE]":
+        return None
+    try:
+        choices = json.loads(data).get("choices", [])
+    except json.JSONDecodeError:
+        return None
+    if not choices:
+        return None
+    return choices[0].get("delta", {}).get("content")

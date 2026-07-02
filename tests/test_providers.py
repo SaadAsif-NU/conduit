@@ -97,3 +97,37 @@ async def test_openai_timeout_maps_to_provider_timeout():
     with pytest.raises(ProviderTimeout):
         await provider.complete(_req(model="gpt-4o"))
     await provider.aclose()
+
+
+async def test_echo_stream_reconstructs_content():
+    provider = EchoProvider()
+    chunks = [chunk async for chunk in provider.stream(_req(content="one two three"))]
+    assert len(chunks) == 3  # word by word
+    assert "".join(chunks) == "one two three"
+
+
+async def test_echo_stream_can_fail_before_yielding():
+    provider = EchoProvider(fail_times=-1)
+    with pytest.raises(ProviderError):
+        # the error is raised as the first item is pulled
+        async for _ in provider.stream(_req()):
+            pass
+
+
+_SSE_STREAM = (
+    'data: {"choices":[{"delta":{"content":"hel"}}]}\n\n'
+    'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n'
+    'data: {"choices":[{"delta":{}}]}\n\n'
+    "data: [DONE]\n\n"
+)
+
+
+@respx.mock
+async def test_openai_stream_parses_sse():
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=_SSE_STREAM)
+    )
+    provider = OpenAIProvider("openai", api_key="sk-test")
+    chunks = [chunk async for chunk in provider.stream(_req(model="gpt-4o"))]
+    assert "".join(chunks) == "hello"
+    await provider.aclose()
