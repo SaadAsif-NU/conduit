@@ -1,8 +1,8 @@
 """Typed error hierarchy.
 
-The router distinguishes *retryable* failures (timeouts, 429s, 5xx — worth
+The router distinguishes *retryable* failures (timeouts, 429s, 5xx, worth
 trying again or failing over) from *fatal* ones (a malformed request, an unknown
-model — retrying is pointless). Every error also carries an HTTP ``status_code``
+model, retrying is pointless). Every error also carries an HTTP ``status_code``
 so the server can translate it to an OpenAI-style error response directly.
 """
 

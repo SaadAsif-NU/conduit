@@ -20,7 +20,7 @@ class ModelPrice:
     output_per_1k: float
 
 
-# Indicative public prices (USD / 1K tokens). Not authoritative — override in
+# Indicative public prices (USD / 1K tokens). Not authoritative, override in
 # config for real accounting.
 DEFAULT_PRICING: dict[str, ModelPrice] = {
     "echo": ModelPrice(0.0, 0.0),

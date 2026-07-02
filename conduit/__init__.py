@@ -1,4 +1,4 @@
-"""Conduit — a self-hostable LLM gateway.
+"""Conduit, a self-hostable LLM gateway.
 
 Programmatic use mirrors the HTTP surface::
 

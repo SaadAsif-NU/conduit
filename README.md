@@ -20,9 +20,9 @@ It runs anywhere Python runs. All state (the usage ledger, the cache) lives in a
 - 🔀 **Routing, retries and fallback.** Map models to an ordered list of providers; transient errors retry with backoff, hard failures fail over to the next provider.
 - 🧪 **Offline by default.** A deterministic `echo` provider means the gateway, examples, and the whole test suite run with no API keys and no network.
 - 💸 **Cost and usage tracking.** Every request (tokens, cost, latency, provider, cache status) is written to an embedded SQLite ledger, queryable via `/usage`.
-- 🚦 **Rate limiting** *(Day 2, see [Roadmap](#roadmap)).* Token-bucket limits per API key and model.
-- 🧠 **Semantic caching** *(Day 2).* Serve cached responses for semantically equivalent prompts.
-- 🌊 **Streaming** *(Day 2).* Server-sent-events streaming, OpenAI-compatible.
+- 🚦 **Rate limiting.** Per-API-key token-bucket limits that allow bursts and refill steadily, returning a `429` when a client is over budget.
+- 🧠 **Response caching.** An exact cache (byte-identical prompts, SQLite-backed) and a semantic cache (near-duplicate prompts) that serve repeated requests for free.
+- 🌊 **Streaming.** Server-sent-events streaming, OpenAI-compatible, including replay of cached responses as a stream.
 - ✅ **Tested and typed.** Async `pytest`, `mypy`-clean, `ruff`-clean, CI on Python 3.10 to 3.13.
 
 ## Architecture
@@ -40,7 +40,7 @@ It runs anywhere Python runs. All state (the usage ledger, the cache) lives in a
                              │                           │
                    ┌─────────▼─────────┐        ┌────────▼─────────┐
                    │  Providers        │        │  Storage (SQLite)│
-                   │  echo / openai /… │        │  ledger · cache  │
+                   │  echo / openai    │        │  ledger · cache  │
                    └───────────────────┘        └──────────────────┘
 ```
 
@@ -97,6 +97,39 @@ export OPENAI_API_KEY=sk-...
 
 Conduit then exposes those models on the same endpoint, with the echo provider available as an always-on local fallback for development.
 
+## Rate limiting, caching, and streaming
+
+Rate limiting and caching are configured from the environment:
+
+```bash
+# Token bucket: 60 requests/minute per API key, bursts of up to 20.
+export CONDUIT_RATE_LIMIT_RPM=60
+export CONDUIT_RATE_LIMIT_BURST=20
+
+# Cache identical requests (also try "semantic" for near-duplicate prompts).
+export CONDUIT_CACHE=exact
+export CONDUIT_CACHE_TTL=3600
+```
+
+The rate-limit identity is the bearer token from the `Authorization` header, so
+each API key gets its own bucket. Cache hits are served for free and marked with
+`X-Conduit-Cached: true` and a `cache` provider in the usage ledger.
+
+Stream a response with server-sent events by setting `stream: true`:
+
+```bash
+curl -N localhost:8080/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{"model": "echo", "messages": [{"role": "user", "content": "stream me"}], "stream": true}'
+```
+
+```
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"stream"}}]}
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":" me"}}]}
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+data: [DONE]
+```
+
 ## Roadmap
 
 Built in deliberate, reviewable increments:
@@ -105,9 +138,9 @@ Built in deliberate, reviewable increments:
 - [x] Provider abstraction, offline `echo` provider, OpenAI-compatible adapter
 - [x] Router with retries and provider fallback
 - [x] Cost tracking, SQLite usage ledger, and `/usage`
-- [ ] **Token-bucket rate limiting** per API key and model
-- [ ] **Semantic and exact response caching**
-- [ ] **SSE streaming** responses
+- [x] **Token-bucket rate limiting** per API key
+- [x] **Exact and semantic response caching**
+- [x] **SSE streaming** responses
 - [ ] Observability: structured request logs, metrics, a usage summary
 
 ## Development

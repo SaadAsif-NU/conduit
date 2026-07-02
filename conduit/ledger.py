@@ -1,6 +1,6 @@
 """SQLite usage & cost ledger.
 
-Every completed request — success or failure — lands here: tokens, cost,
+Every completed request, success or failure, lands here: tokens, cost,
 latency, which provider served it, and whether it was a cache hit. That single
 append-only table is enough to answer "what did we spend, on what, and how fast
 was it", which the ``/usage`` endpoint surfaces. Embedded SQLite keeps it
