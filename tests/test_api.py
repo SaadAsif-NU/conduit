@@ -1,9 +1,26 @@
 from __future__ import annotations
 
+import json
+
 
 def _chat(client, model="echo", content="hello", **extra):
     body = {"model": model, "messages": [{"role": "user", "content": content}], **extra}
     return client.post("/v1/chat/completions", json=body)
+
+
+def _collect_stream(resp) -> tuple[str, bool]:
+    content, saw_done = "", False
+    for line in resp.text.splitlines():
+        if not line.startswith("data:"):
+            continue
+        data = line[len("data:") :].strip()
+        if data == "[DONE]":
+            saw_done = True
+            continue
+        delta = json.loads(data)["choices"][0]["delta"].get("content")
+        if delta:
+            content += delta
+    return content, saw_done
 
 
 def test_health(client):
@@ -34,10 +51,18 @@ def test_unknown_model_returns_404_openai_error(client):
     assert resp.json()["error"]["type"] == "invalid_request_error"
 
 
-def test_streaming_rejected_for_now(client):
-    resp = _chat(client, stream=True)
-    assert resp.status_code == 400
-    assert "streaming" in resp.json()["error"]["message"].lower()
+def test_streaming_returns_sse_chunks(client):
+    resp = _chat(client, content="hello there world", stream=True)
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    content, saw_done = _collect_stream(resp)
+    assert content == "hello there world"
+    assert saw_done
+
+
+def test_streaming_unknown_model_is_404(client):
+    resp = _chat(client, model="gpt-9-turbo", stream=True)
+    assert resp.status_code == 404
 
 
 def test_list_models(client):

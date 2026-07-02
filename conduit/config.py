@@ -2,7 +2,7 @@
 
 A :class:`GatewayConfig` describes the providers Conduit fronts, how models route
 to them (with fallback order), and pricing. It can be built programmatically, or
-resolved from the environment via :meth:`GatewayConfig.from_env` — which always
+resolved from the environment via :meth:`GatewayConfig.from_env`, which always
 includes the offline ``echo`` provider and adds real ones when their keys are
 present.
 """
@@ -14,7 +14,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .cost import DEFAULT_PRICING, ModelPrice
+from .ratelimit import RateLimit
 from .types import ProviderConfig
+
+
+@dataclass(frozen=True, slots=True)
+class CacheConfig:
+    """Response-cache settings.
+
+    Attributes:
+        mode: ``"none"``, ``"exact"`` (byte-identical prompts) or ``"semantic"``
+            (near-duplicate prompts).
+        ttl: Optional entry lifetime in seconds (exact cache only).
+        threshold: Cosine-similarity threshold for the semantic cache.
+    """
+
+    mode: str = "none"
+    ttl: float | None = None
+    threshold: float = 0.92
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,9 +40,9 @@ class ProviderSpec:
 
     Attributes:
         name: Unique id used in routing and the ledger (e.g. ``"openai"``).
-        type: Adapter type — ``"echo"`` or ``"openai"``.
+        type: Adapter type, ``"echo"`` or ``"openai"``.
         models: Model ids this provider serves.
-        options: Adapter options (``api_key``, ``base_url``, ``timeout`` …).
+        options: Adapter options such as ``api_key``, ``base_url``, ``timeout``.
     """
 
     name: str
@@ -44,6 +61,8 @@ class GatewayConfig:
     # If a real model's providers all fail, fall back to the echo provider so
     # development never hard-stops. Disable for strict production accounting.
     fallback_to_echo: bool = True
+    rate_limit: RateLimit | None = None
+    cache: CacheConfig = field(default_factory=CacheConfig)
 
     def routes(self) -> dict[str, list[str]]:
         """Build ``model -> ordered provider names`` (the fallback chain).
@@ -91,4 +110,22 @@ class GatewayConfig:
                     },
                 ),
             )
-        return cls(providers=tuple(providers))
+        return cls(
+            providers=tuple(providers),
+            rate_limit=cls._rate_limit_from_env(),
+            cache=cls._cache_from_env(),
+        )
+
+    @staticmethod
+    def _rate_limit_from_env() -> RateLimit | None:
+        rpm = os.environ.get("CONDUIT_RATE_LIMIT_RPM")
+        if not rpm:
+            return None
+        burst = os.environ.get("CONDUIT_RATE_LIMIT_BURST", rpm)
+        return RateLimit(requests_per_minute=float(rpm), burst=int(float(burst)))
+
+    @staticmethod
+    def _cache_from_env() -> CacheConfig:
+        mode = os.environ.get("CONDUIT_CACHE", "none")
+        ttl = os.environ.get("CONDUIT_CACHE_TTL")
+        return CacheConfig(mode=mode, ttl=float(ttl) if ttl else None)

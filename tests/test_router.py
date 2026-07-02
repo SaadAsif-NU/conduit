@@ -2,11 +2,18 @@ from __future__ import annotations
 
 import pytest
 
+from conduit.cache import ExactCache
 from conduit.config import GatewayConfig, ProviderSpec
-from conduit.errors import AllProvidersFailedError, ProviderError, UnknownModelError
+from conduit.errors import (
+    AllProvidersFailedError,
+    ProviderError,
+    RateLimitedError,
+    UnknownModelError,
+)
 from conduit.ledger import UsageLedger
 from conduit.providers import EchoProvider, build_providers
 from conduit.providers.base import Provider
+from conduit.ratelimit import RateLimit, TokenBucketLimiter
 from conduit.router import Router
 from conduit.types import ChatRequest, ChatResponse, Message
 
@@ -100,3 +107,60 @@ async def test_all_providers_fail_raises_and_logs_error():
     # the failure is logged, but excluded from the (successful) usage summary
     assert ledger.count() == 1
     assert ledger.summary()["requests"] == 0
+
+
+async def test_rate_limit_rejects_over_budget_client():
+    config = GatewayConfig.default()
+    limiter = TokenBucketLimiter(RateLimit(requests_per_minute=60, burst=1))
+    router = Router(config, build_providers(config), UsageLedger(), rate_limiter=limiter)
+    await router.complete(_req("echo"), client_key="k1")
+    with pytest.raises(RateLimitedError):
+        await router.complete(_req("echo"), client_key="k1")
+    # a different client is unaffected
+    await router.complete(_req("echo"), client_key="k2")
+
+
+async def test_cache_hit_skips_provider():
+    config = GatewayConfig.default()
+    providers = {"echo": EchoProvider("echo")}
+    router = Router(config, providers, UsageLedger(), cache=ExactCache())
+
+    first = await router.complete(_req("echo", "same prompt"))
+    assert first.cached is False and first.provider == "echo"
+
+    second = await router.complete(_req("echo", "same prompt"))
+    assert second.cached is True and second.provider == "cache"
+    assert second.response.text == first.response.text
+    # provider was called exactly once
+    assert providers["echo"].calls == 1
+
+
+async def _collect(agen) -> str:
+    return "".join([chunk async for chunk in agen])
+
+
+async def test_stream_reconstructs_and_logs():
+    config = GatewayConfig.default()
+    ledger = UsageLedger()
+    router = Router(config, build_providers(config), ledger, backoff_base=0.0)
+    content = await _collect(router.stream(_req("echo", "alpha beta gamma")))
+    assert content == "alpha beta gamma"
+    assert ledger.summary()["requests"] == 1
+
+
+async def test_stream_falls_over_before_first_chunk():
+    config = _two_provider_config()
+    providers = {"primary": CountingFailer("primary", retryable=True), "echo": EchoProvider("echo")}
+    router = Router(config, providers, UsageLedger(), backoff_base=0.0)
+    content = await _collect(router.stream(_req("m", "hello world")))
+    assert content == "hello world"  # served by the echo fallback
+
+
+async def test_stream_replays_cache_hit():
+    config = GatewayConfig.default()
+    providers = {"echo": EchoProvider("echo")}
+    router = Router(config, providers, UsageLedger(), cache=ExactCache())
+    await router.complete(_req("echo", "cache me please"))
+    streamed = await _collect(router.stream(_req("echo", "cache me please")))
+    assert streamed == "cache me please"
+    assert providers["echo"].calls == 1  # cache replayed, provider not called again
