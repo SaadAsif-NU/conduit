@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.Python
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing / coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Conduit local state (SQLite ledger / cache)
+*.db
+*.db-wal
+*.db-shm
+data/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Secrets
+.env
