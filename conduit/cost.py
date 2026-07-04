@@ -24,9 +24,11 @@ class ModelPrice:
 # config for real accounting.
 DEFAULT_PRICING: dict[str, ModelPrice] = {
     "echo": ModelPrice(0.0, 0.0),
+    "gpt-5": ModelPrice(0.00125, 0.01),
+    "gpt-5-mini": ModelPrice(0.00025, 0.002),
+    "gpt-4.1": ModelPrice(0.002, 0.008),
     "gpt-4o": ModelPrice(0.0025, 0.01),
     "gpt-4o-mini": ModelPrice(0.00015, 0.0006),
-    "gpt-3.5-turbo": ModelPrice(0.0005, 0.0015),
 }
 
 
